@@ -1,6 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+
+type TaskRow = {
+  id: string;
+  content: string;
+  category: string | null;
+  priority: number;
+  starred: boolean;
+  status: "active" | "done" | "archived";
+  view: "today" | "week" | "month";
+};
 
 /* ------------------------------------------------------------------ */
 /*  MOCK DATA                                                          */
@@ -111,9 +123,54 @@ function Check({
 /* ------------------------------------------------------------------ */
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [authed, setAuthed] = useState(false);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [newTask, setNewTask] = useState("");
   const [revealMoney, setRevealMoney] = useState(false);
   const [done, setDone] = useState<Record<string, boolean>>({});
   const [ask, setAsk] = useState("");
+
+  // --- Auth gate: redirect to /login if not signed in ---
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace("/login");
+      } else {
+        setAuthed(true);
+        loadTasks();
+      }
+    });
+  }, [router]);
+
+  async function loadTasks() {
+    const { data } = await supabase
+      .from("tasks")
+      .select("*")
+      .order("priority", { ascending: false });
+    if (data) setTasks(data as TaskRow[]);
+  }
+
+  async function addTask(e: React.FormEvent) {
+    e.preventDefault();
+    const content = newTask.trim();
+    if (!content) return;
+    setNewTask("");
+    await supabase.from("tasks").insert({ content, starred: true, view: "today" });
+    loadTasks();
+  }
+
+  async function completeTask(id: string) {
+    await supabase.from("tasks").update({ status: "done" }).eq("id", id);
+    loadTasks();
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
+  const keyTasks = tasks.filter((t) => t.starred && t.status === "active");
 
   const toggle = (key: string) =>
     setDone((d) => ({ ...d, [key]: !d[key] }));
@@ -135,6 +192,14 @@ export default function Dashboard() {
   const money = (n: number) =>
     "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 
+  if (!authed) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink text-muted">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-ink px-3 pb-28 pt-4 text-ghost md:px-5">
       {/* HEADER */}
@@ -143,7 +208,10 @@ export default function Dashboard() {
           <h1 className="text-lg font-semibold tracking-tight text-acid">Operator</h1>
           <span className="panel-title">Personal OS · V1</span>
         </div>
-        <span className="panel-title">{today} · {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+        <div className="flex items-center gap-3">
+          <span className="panel-title">{today} · {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+          <button onClick={signOut} className="chip hover:text-acid">Sign out</button>
+        </div>
       </header>
 
       {/* GRID */}
@@ -175,20 +243,32 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Key Tasks */}
+          {/* Key Tasks — LIVE from Supabase */}
           <section className="panel">
-            <PanelTitle right={<span className="h-1.5 w-1.5 rounded-full bg-acid" />}>
+            <PanelTitle right={<span className="text-[10px] text-acidDim">live</span>}>
               Key Tasks · Today
             </PanelTitle>
-            {KEY_TASKS.map((t) => (
+            {keyTasks.length === 0 && (
+              <p className="py-1 text-[12px] text-muted">No starred tasks yet — add one below.</p>
+            )}
+            {keyTasks.map((t) => (
               <Check
                 key={t.id}
-                checked={!!done[`key:${t.id}`]}
-                onChange={() => toggle(`key:${t.id}`)}
+                checked={false}
+                onChange={() => completeTask(t.id)}
                 label={t.content}
-                meta={t.category}
+                meta={t.category ?? undefined}
               />
             ))}
+            <form onSubmit={addTask} className="mt-2 flex gap-2">
+              <input
+                value={newTask}
+                onChange={(e) => setNewTask(e.target.value)}
+                placeholder="+ add a key task"
+                className="flex-1 rounded border border-line bg-panel2 px-2 py-1 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+              />
+              <button className="chip hover:text-acid">Add</button>
+            </form>
           </section>
 
           {/* Daily Habits */}
