@@ -24,11 +24,35 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > the interface. The next phases make it real.
 
 ### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+1. Create a free Supabase project. *(your step — manual)*
+2. Run `supabase/schema.sql` in the Supabase SQL editor. *(your step — manual)*
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx`.
+4. ✅ Mock data in `app/page.tsx` replaced with live queries.
+5. ✅ Tasks, habits, goals, and meals now save to Supabase.
+
+**What's live now:** Finance Pulse, Key Tasks, Daily Habits, CRM Kanban,
+Goals, Nutrition, and the Journal entry all read from (and where it makes
+sense, write to) the tables in `supabase/schema.sql`.
+
+- **Daily Habits** seed themselves from a template the first time you open
+  the app each day (parent "group" rows + nested item rows), then every
+  check persists.
+- **Finance Pulse** reads the latest row per label from the `finance`
+  table. Seed it with three labels so the numbers show up:
+  ```sql
+  insert into finance (label, amount) values
+    ('net_worth',    2481300),
+    ('month_change', 184000),
+    ('day_change',   56210);
+  ```
+  (Insert a new row with the same label to update a value — the newest
+  `as_of` wins.)
+- **Nutrition** totals (kcal / protein / kcal-left) are computed from the
+  meals you log today; the daily calorie target is still a constant in
+  `app/page.tsx`.
+
+> Still on sample data (no table in the schema yet): the **Calendar** and
+> the **Brain · Life Categories** grid.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
