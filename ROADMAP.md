@@ -23,12 +23,28 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) (DONE)
+1. Create a free Supabase project. _(your step — see setup below)_
+2. Run `supabase/schema.sql` in the Supabase SQL editor. _(your step)_
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx` + auth gate.
+4. ✅ Mock data in `app/page.tsx` replaced with live queries for every
+   schema-backed panel: Finance Pulse, Key Tasks, Daily Habits, CRM Kanban,
+   Journal, Goals, and Nutrition.
+5. ✅ Tasks, habits, goals, and meals save when you check or add them.
+
+> **Still fixed config (no table yet):** the *Brain · Life Categories* and
+> *Calendar* panels. They move to live data when their tables land.
+>
+> **What writes where:**
+> - **Key Tasks** add → `tasks` (starred, `view = today`); check → `status = done`.
+> - **CRM Kanban** reads active `tasks` grouped by `view` (today/week/month).
+> - **Daily Habits** seed a fresh set from a template the first time a day is
+>   opened (nested parent/child rows in `habits`); checking toggles `completed`.
+> - **Goals** add → `goals` with `period = month`.
+> - **Nutrition** “+ Log” → `nutrition`; the stat row sums today's calories/protein.
+> - **Finance Pulse** reads `finance` rows by label (`net_worth`,
+>   `month_change`, `day_change`).
+> - **Journal** shows the latest `journal` entry (voice capture is Phase 4).
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
