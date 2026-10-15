@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -14,22 +14,31 @@ type TaskRow = {
   view: "today" | "week" | "month";
 };
 
+type MealRow = {
+  id: string;
+  meal: string;
+  calories: number | null;
+  protein: number | null;
+};
+
+type JournalRow = {
+  id: string;
+  date: string;
+  raw_transcript: string | null;
+  ai_summary: string | null;
+};
+
 /* ------------------------------------------------------------------ */
 /*  MOCK DATA                                                          */
-/*  This is hard-coded for now. In Phase 2 it gets replaced by live   */
-/*  Supabase queries. The shapes here match the database schema.      */
+/*  Panels that aren't live yet still use hard-coded sample data. In   */
+/*  Phase 3 the Journal, Nutrition and the Ask bar became real; the    */
+/*  rest below are placeholders until their phase lands.               */
 /* ------------------------------------------------------------------ */
 
 const FINANCE = { netWorth: 2481300, month: 184000, day: 56210 };
 
 const FINANCE_BARS = [
   8, 10, 7, 12, 9, 14, 11, 16, 13, 18, 15, 20, 17, 22, 19, 24, 21, 26, 23, 28,
-];
-
-const KEY_TASKS = [
-  { id: 1, content: "Send investment proposal to client", category: "business" },
-  { id: 2, content: "Review Q3 portfolio for risk exposure", category: "finance" },
-  { id: 3, content: "Ship dashboard v1.1 nutrition fix", category: "products" },
 ];
 
 const HABIT_GROUPS = [
@@ -69,12 +78,7 @@ const GOALS = [
   "Close 2 enterprise deals",
 ];
 
-const MEALS = [
-  { meal: "Chicken & rice", calories: 550, protein: 46 },
-  { meal: "Greek yogurt + berries", calories: 210, protein: 18 },
-];
-
-const HEALTH = { calories: 760, protein: 64, target: 2040 };
+const CALORIE_TARGET = 2040; // daily kcal target (not tracked in the DB yet)
 
 /* ------------------------------------------------------------------ */
 /*  SMALL UI HELPERS                                                   */
@@ -118,6 +122,18 @@ function Check({
   );
 }
 
+/** POST JSON to a same-origin API route and return the parsed body. */
+async function postJSON<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data as T;
+}
+
 /* ------------------------------------------------------------------ */
 /*  PAGE                                                               */
 /* ------------------------------------------------------------------ */
@@ -127,9 +143,29 @@ export default function Dashboard() {
   const [authed, setAuthed] = useState(false);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [newTask, setNewTask] = useState("");
+  const [adding, setAdding] = useState(false);
   const [revealMoney, setRevealMoney] = useState(false);
   const [done, setDone] = useState<Record<string, boolean>>({});
+
+  // Ask bar (Phase 3 · AI)
   const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [askErr, setAskErr] = useState("");
+
+  // Nutrition (Phase 3 · AI estimate + live save)
+  const [meals, setMeals] = useState<MealRow[]>([]);
+  const [logOpen, setLogOpen] = useState(false);
+  const [mealText, setMealText] = useState("");
+  const [logging, setLogging] = useState(false);
+  const [nutErr, setNutErr] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Journal (Phase 3 · AI summarize + live save)
+  const [transcript, setTranscript] = useState("");
+  const [summarizing, setSummarizing] = useState(false);
+  const [journalErr, setJournalErr] = useState("");
+  const [lastJournal, setLastJournal] = useState<JournalRow | null>(null);
 
   // --- Auth gate: redirect to /login if not signed in ---
   useEffect(() => {
@@ -139,6 +175,8 @@ export default function Dashboard() {
       } else {
         setAuthed(true);
         loadTasks();
+        loadMeals();
+        loadJournal();
       }
     });
   }, [router]);
@@ -151,18 +189,144 @@ export default function Dashboard() {
     if (data) setTasks(data as TaskRow[]);
   }
 
+  async function loadMeals() {
+    const { data } = await supabase
+      .from("nutrition")
+      .select("id, meal, calories, protein")
+      .order("eaten_at", { ascending: false })
+      .limit(20);
+    if (data) setMeals(data as MealRow[]);
+  }
+
+  async function loadJournal() {
+    const { data } = await supabase
+      .from("journal")
+      .select("id, date, raw_transcript, ai_summary")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (data && data.length) setLastJournal(data[0] as JournalRow);
+  }
+
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
     const content = newTask.trim();
-    if (!content) return;
+    if (!content || adding) return;
+    setAdding(true);
     setNewTask("");
-    await supabase.from("tasks").insert({ content, starred: true, view: "today" });
-    loadTasks();
+
+    // Ask Claude to classify the task; fall back to an unclassified insert.
+    let category: string | null = null;
+    let priority = 0;
+    try {
+      const c = await postJSON<{ category: string; priority: number }>(
+        "/api/classify",
+        { content }
+      );
+      category = c.category;
+      priority = c.priority;
+    } catch {
+      /* classification is best-effort — still save the task */
+    }
+
+    await supabase
+      .from("tasks")
+      .insert({ content, starred: true, view: "today", category, priority });
+    await loadTasks();
+    setAdding(false);
   }
 
   async function completeTask(id: string) {
     await supabase.from("tasks").update({ status: "done" }).eq("id", id);
     loadTasks();
+  }
+
+  async function askOS(e: React.FormEvent) {
+    e.preventDefault();
+    if (asking) return;
+    setAsking(true);
+    setAskErr("");
+    setAnswer("");
+    const active = tasks
+      .filter((t) => t.status === "active")
+      .map((t) => ({
+        content: t.content,
+        category: t.category,
+        priority: t.priority,
+        starred: t.starred,
+        view: t.view,
+      }));
+    try {
+      const { answer } = await postJSON<{ answer: string }>("/api/ask", {
+        question: ask,
+        tasks: active,
+      });
+      setAnswer(answer);
+    } catch (err) {
+      setAskErr(err instanceof Error ? err.message : "Ask failed.");
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  function readFileAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error("Could not read image."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function logMeal(e: React.FormEvent) {
+    e.preventDefault();
+    if (logging) return;
+    const file = fileRef.current?.files?.[0];
+    if (!mealText.trim() && !file) return;
+    setLogging(true);
+    setNutErr("");
+    try {
+      const image = file ? await readFileAsDataURL(file) : undefined;
+      const est = await postJSON<{ meal: string; calories: number; protein: number }>(
+        "/api/nutrition/estimate",
+        { meal: mealText.trim(), image }
+      );
+      await supabase.from("nutrition").insert({
+        meal: est.meal,
+        calories: est.calories,
+        protein: est.protein,
+      });
+      setMealText("");
+      if (fileRef.current) fileRef.current.value = "";
+      setLogOpen(false);
+      await loadMeals();
+    } catch (err) {
+      setNutErr(err instanceof Error ? err.message : "Could not log meal.");
+    } finally {
+      setLogging(false);
+    }
+  }
+
+  async function summarizeJournal(e: React.FormEvent) {
+    e.preventDefault();
+    const text = transcript.trim();
+    if (!text || summarizing) return;
+    setSummarizing(true);
+    setJournalErr("");
+    try {
+      const { summary } = await postJSON<{ summary: string }>(
+        "/api/journal/summarize",
+        { transcript: text }
+      );
+      await supabase
+        .from("journal")
+        .insert({ raw_transcript: text, ai_summary: summary });
+      setTranscript("");
+      await loadJournal();
+    } catch (err) {
+      setJournalErr(err instanceof Error ? err.message : "Could not summarize.");
+    } finally {
+      setSummarizing(false);
+    }
   }
 
   async function signOut() {
@@ -188,6 +352,10 @@ export default function Dashboard() {
   const habitPct = Math.round(
     (allHabits.filter((k) => done[k]).length / allHabits.length) * 100
   );
+
+  const caloriesToday = meals.reduce((s, m) => s + (m.calories ?? 0), 0);
+  const proteinToday = meals.reduce((s, m) => s + (m.protein ?? 0), 0);
+  const caloriesLeft = Math.max(0, CALORIE_TARGET - caloriesToday);
 
   const money = (n: number) =>
     "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -243,9 +411,9 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Key Tasks — LIVE from Supabase */}
+          {/* Key Tasks — LIVE from Supabase, auto-classified by Claude */}
           <section className="panel">
-            <PanelTitle right={<span className="text-[10px] text-acidDim">live</span>}>
+            <PanelTitle right={<span className="text-[10px] text-acidDim">live · AI</span>}>
               Key Tasks · Today
             </PanelTitle>
             {keyTasks.length === 0 && (
@@ -267,7 +435,9 @@ export default function Dashboard() {
                 placeholder="+ add a key task"
                 className="flex-1 rounded border border-line bg-panel2 px-2 py-1 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
               />
-              <button className="chip hover:text-acid">Add</button>
+              <button disabled={adding} className="chip hover:text-acid disabled:opacity-50">
+                {adding ? "…" : "Add"}
+              </button>
             </form>
           </section>
 
@@ -345,18 +515,41 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Journal */}
+          {/* Journal — LIVE: type a day, Claude summarizes, saved to Supabase */}
           <section className="panel">
-            <PanelTitle>Journal</PanelTitle>
-            <button className="mb-3 flex w-full items-center justify-center gap-2 rounded border border-acid/40 bg-acid/5 py-2 text-[12px] text-acid hover:bg-acid/10">
-              <span className="h-2 w-2 rounded-full bg-acid" />
-              Hold to voice-note your day
-            </button>
-            <div className="text-[11px] text-muted">
-              <div className="mb-1 uppercase tracking-wider">Yesterday</div>
-              Strong creative output in the morning; closed the client call well.
-              Energy dipped after a late lunch — note the carb crash pattern.
-            </div>
+            <PanelTitle right={<span className="text-[10px] text-acidDim">live · AI</span>}>
+              Journal
+            </PanelTitle>
+            <form onSubmit={summarizeJournal} className="mb-3">
+              <textarea
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                rows={3}
+                placeholder="How did today go? Dump your thoughts — Claude writes the summary."
+                className="w-full resize-none rounded border border-line bg-panel2 px-2 py-2 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+              />
+              <div className="mt-2 flex items-center justify-between">
+                {journalErr ? (
+                  <span className="text-[11px] text-red-400">{journalErr}</span>
+                ) : (
+                  <span className="text-[11px] text-muted">Voice capture arrives in Phase 4.</span>
+                )}
+                <button
+                  disabled={summarizing || !transcript.trim()}
+                  className="chip hover:text-acid disabled:opacity-50"
+                >
+                  {summarizing ? "Summarizing…" : "Summarize & save"}
+                </button>
+              </div>
+            </form>
+            {lastJournal ? (
+              <div className="text-[11px] text-muted">
+                <div className="mb-1 uppercase tracking-wider">{lastJournal.date}</div>
+                {lastJournal.ai_summary || lastJournal.raw_transcript}
+              </div>
+            ) : (
+              <div className="text-[11px] text-muted">No entries yet.</div>
+            )}
           </section>
         </div>
 
@@ -390,47 +583,106 @@ export default function Dashboard() {
             </ol>
           </section>
 
-          {/* Nutrition */}
+          {/* Nutrition — LIVE: Claude estimates kcal/protein from text or a photo */}
           <section className="panel">
-            <PanelTitle right={<button className="chip hover:text-acid">+ Log</button>}>
+            <PanelTitle
+              right={
+                <button
+                  onClick={() => setLogOpen((v) => !v)}
+                  className="chip hover:text-acid"
+                >
+                  {logOpen ? "Close" : "+ Log"}
+                </button>
+              }
+            >
               Nutrition
             </PanelTitle>
+
+            {logOpen && (
+              <form onSubmit={logMeal} className="mb-3 space-y-2 rounded border border-line bg-panel2 p-2">
+                <input
+                  value={mealText}
+                  onChange={(e) => setMealText(e.target.value)}
+                  placeholder="Describe a meal (e.g. chicken burrito bowl)"
+                  className="w-full rounded border border-line bg-panel px-2 py-1 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="text-[10px] text-muted file:mr-2 file:rounded file:border file:border-line file:bg-panel file:px-2 file:py-1 file:text-[10px] file:text-ghost"
+                  />
+                  <button
+                    disabled={logging}
+                    className="chip hover:text-acid disabled:opacity-50"
+                  >
+                    {logging ? "Estimating…" : "Estimate & log"}
+                  </button>
+                </div>
+                {nutErr && <p className="text-[11px] text-red-400">{nutErr}</p>}
+              </form>
+            )}
+
             <div className="space-y-1">
-              {MEALS.map((m, i) => (
-                <div key={i} className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]">
+              {meals.length === 0 && (
+                <p className="py-1 text-[12px] text-muted">No meals logged yet.</p>
+              )}
+              {meals.map((m) => (
+                <div key={m.id} className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]">
                   <span className="text-ghost">{m.meal}</span>
-                  <span className="text-muted">{m.calories} kcal · {m.protein}p</span>
+                  <span className="text-muted">{m.calories ?? 0} kcal · {m.protein ?? 0}p</span>
                 </div>
               ))}
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-              <Stat n={HEALTH.calories} label="kcal" />
-              <Stat n={HEALTH.protein} label="protein g" />
-              <Stat n={HEALTH.target} label="kcal left" />
+              <Stat n={caloriesToday} label="kcal" />
+              <Stat n={proteinToday} label="protein g" />
+              <Stat n={caloriesLeft} label="kcal left" />
             </div>
           </section>
         </div>
       </div>
 
-      {/* ASK BAR */}
+      {/* ASK BAR — Phase 3: asks Claude using your live task data */}
       <div className="fixed inset-x-0 bottom-0 border-t border-line bg-ink/95 px-3 py-3 backdrop-blur md:px-5">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            alert("Wired in Phase 3 (AI): this will ask Claude using your live task data.");
-          }}
-          className="mx-auto flex max-w-5xl gap-2"
-        >
-          <input
-            value={ask}
-            onChange={(e) => setAsk(e.target.value)}
-            placeholder="Ask your OS:  what are the top 3 things I should do right now?"
-            className="flex-1 rounded border border-line bg-panel px-3 py-2 text-[13px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
-          />
-          <button className="rounded bg-acid px-5 py-2 text-[13px] font-semibold text-ink hover:bg-acid/90">
-            Ask
-          </button>
-        </form>
+        <div className="mx-auto max-w-5xl">
+          {(answer || askErr) && (
+            <div className="mb-2 rounded border border-line bg-panel px-3 py-2 text-[13px]">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="panel-title">OS · answer</span>
+                <button
+                  onClick={() => {
+                    setAnswer("");
+                    setAskErr("");
+                  }}
+                  className="chip hover:text-acid"
+                >
+                  Dismiss
+                </button>
+              </div>
+              {askErr ? (
+                <p className="text-red-400">{askErr}</p>
+              ) : (
+                <p className="whitespace-pre-wrap text-ghost">{answer}</p>
+              )}
+            </div>
+          )}
+          <form onSubmit={askOS} className="flex gap-2">
+            <input
+              value={ask}
+              onChange={(e) => setAsk(e.target.value)}
+              placeholder="Ask your OS:  what are the top 3 things I should do right now?"
+              className="flex-1 rounded border border-line bg-panel px-3 py-2 text-[13px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+            />
+            <button
+              disabled={asking}
+              className="rounded bg-acid px-5 py-2 text-[13px] font-semibold text-ink hover:bg-acid/90 disabled:opacity-50"
+            >
+              {asking ? "Thinking…" : "Ask"}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
