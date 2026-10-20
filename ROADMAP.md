@@ -23,12 +23,22 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### Phase 2 — Database + Auth (live data) — code DONE
+The app code for this phase is finished; steps 1–2 are the one-time setup
+you do in your own Supabase project.
+1. Create a free Supabase project. *(your setup step)*
+2. Run `supabase/schema.sql`, then optionally `supabase/seed.sql`, in the
+   Supabase SQL editor. *(your setup step)*
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx`.
+4. ✅ Every panel in `app/page.tsx` now reads live from Supabase via
+   `lib/db.ts`: Finance, Key Tasks, Habits, Kanban (by task `view`),
+   Brain category counts, Journal, Goals, Nutrition. Empty tables show calm
+   empty states. *(Calendar stays a sample — no events table yet.)*
+5. ✅ Writes persist: add/complete tasks, check habits, add goals, log meals.
+
+> Copy `.env.local.example` to `.env.local` and fill in your Supabase URL +
+> anon key, then `npm run dev`. Run `supabase/seed.sql` to populate the
+> dashboard with sample rows, or just start adding your own.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
@@ -60,9 +70,14 @@ life-os-setup/
 ├── app/
 │   ├── globals.css      # Tailwind + base styles
 │   ├── layout.tsx       # root layout, fonts, metadata
-│   └── page.tsx         # the Operator dashboard (mock data for now)
+│   ├── login/page.tsx   # Supabase password login
+│   └── page.tsx         # the Operator dashboard (live Supabase data)
+├── lib/
+│   ├── supabaseClient.ts # shared browser Supabase client
+│   └── db.ts            # typed row shapes + loaders/mutators
 ├── supabase/
-│   └── schema.sql       # database tables + row-level security
+│   ├── schema.sql       # database tables + row-level security
+│   └── seed.sql         # optional sample rows
 ├── .env.local.example   # copy to .env.local and add your keys
 ├── tailwind.config.ts
 └── package.json
