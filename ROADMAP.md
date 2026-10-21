@@ -30,12 +30,25 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 4. Replace the mock data in `app/page.tsx` with live queries.
 5. Make tasks/habits/goals actually save when you check or add them.
 
-### Phase 3 — AI features (Claude)
-- Classify a new task into a category + priority.
-- Summarize a journal transcript.
-- Estimate calories/protein from a meal description or photo.
-- Answer "what are the top 3 things I should do right now?" from your task rows.
-  (This is the bottom **Ask** bar — currently a stub.)
+### ✅ Phase 3 — AI features (Claude) (DONE)
+All four features run server-side through route handlers in `app/api/*`, so the
+`ANTHROPIC_API_KEY` stays on the server and is never shipped to the browser.
+Set `ANTHROPIC_API_KEY` in `.env.local` to turn them on.
+
+- **Classify a new task** into a category + priority — `POST /api/classify`.
+  Runs automatically when you add a Key Task; falls back to saving the task
+  uncategorized if the AI call fails or no key is set.
+- **Summarize a journal transcript** — `POST /api/summarize`. Type notes in the
+  Journal panel, hit "Summarize with AI & save"; the summary is stored in the
+  `journal` table and shown in the recent-entries list.
+- **Estimate calories/protein** from a meal description (and/or a base64 photo)
+  — `POST /api/nutrition`. The Nutrition panel's "+ Log" button estimates and
+  saves to the `nutrition` table; today's totals update live.
+- **Answer "what should I do right now?"** from your task rows — `POST /api/ask`.
+  The bottom **Ask** bar (previously a stub) now sends your live, active tasks
+  to Claude and shows the answer inline.
+
+> Model: `claude-opus-5-5`, configured in one place (`lib/anthropic.ts`).
 
 ### Phase 4 — Voice capture (Telegram + Whisper)
 - A Vercel serverless function as a Telegram bot webhook.
