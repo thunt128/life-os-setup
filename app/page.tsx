@@ -14,6 +14,25 @@ type TaskRow = {
   view: "today" | "week" | "month";
 };
 
+type MealRow = {
+  id: string;
+  meal: string;
+  calories: number | null;
+  protein: number | null;
+  eaten_at: string;
+};
+
+type JournalRow = {
+  id: string;
+  date: string;
+  raw_transcript: string | null;
+  ai_summary: string | null;
+  created_at: string;
+};
+
+// Daily calorie target used by the Nutrition "kcal left" tile.
+const CALORIE_TARGET = 2800;
+
 /* ------------------------------------------------------------------ */
 /*  MOCK DATA                                                          */
 /*  This is hard-coded for now. In Phase 2 it gets replaced by live   */
@@ -69,13 +88,6 @@ const GOALS = [
   "Close 2 enterprise deals",
 ];
 
-const MEALS = [
-  { meal: "Chicken & rice", calories: 550, protein: 46 },
-  { meal: "Greek yogurt + berries", calories: 210, protein: 18 },
-];
-
-const HEALTH = { calories: 760, protein: 64, target: 2040 };
-
 /* ------------------------------------------------------------------ */
 /*  SMALL UI HELPERS                                                   */
 /* ------------------------------------------------------------------ */
@@ -129,7 +141,26 @@ export default function Dashboard() {
   const [newTask, setNewTask] = useState("");
   const [revealMoney, setRevealMoney] = useState(false);
   const [done, setDone] = useState<Record<string, boolean>>({});
+
+  // Ask bar (Phase 3 — Claude over live tasks)
   const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [askError, setAskError] = useState("");
+
+  // Journal (Phase 3 — summarize + persist)
+  const [journal, setJournal] = useState<JournalRow | null>(null);
+  const [journalDraft, setJournalDraft] = useState("");
+  const [summarizing, setSummarizing] = useState(false);
+  const [journalError, setJournalError] = useState("");
+
+  // Nutrition (Phase 3 — AI estimate + persist)
+  const [meals, setMeals] = useState<MealRow[]>([]);
+  const [logging, setLogging] = useState(false);
+  const [mealDraft, setMealDraft] = useState("");
+  const [mealImage, setMealImage] = useState<{ data: string; mediaType: string } | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const [mealError, setMealError] = useState("");
 
   // --- Auth gate: redirect to /login if not signed in ---
   useEffect(() => {
@@ -139,6 +170,8 @@ export default function Dashboard() {
       } else {
         setAuthed(true);
         loadTasks();
+        loadMeals();
+        loadJournal();
       }
     });
   }, [router]);
@@ -151,13 +184,163 @@ export default function Dashboard() {
     if (data) setTasks(data as TaskRow[]);
   }
 
+  async function loadMeals() {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const { data } = await supabase
+      .from("nutrition")
+      .select("*")
+      .gte("eaten_at", startOfDay.toISOString())
+      .order("eaten_at", { ascending: false });
+    if (data) setMeals(data as MealRow[]);
+  }
+
+  async function loadJournal() {
+    const { data } = await supabase
+      .from("journal")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (data && data.length) setJournal(data[0] as JournalRow);
+  }
+
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
     const content = newTask.trim();
     if (!content) return;
     setNewTask("");
-    await supabase.from("tasks").insert({ content, starred: true, view: "today" });
+
+    // Ask Claude to classify the task; fall back to no category on failure.
+    let category: string | null = null;
+    let priority = 0;
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        category = data.category ?? null;
+        priority = typeof data.priority === "number" ? data.priority : 0;
+      }
+    } catch {
+      /* classification is best-effort — still save the task */
+    }
+
+    await supabase
+      .from("tasks")
+      .insert({ content, category, priority, starred: true, view: "today" });
     loadTasks();
+  }
+
+  async function askOperator(e: React.FormEvent) {
+    e.preventDefault();
+    const question = ask.trim();
+    if (!question || asking) return;
+    setAsking(true);
+    setAskError("");
+    setAnswer("");
+    try {
+      const res = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question,
+          tasks: tasks.map((t) => ({
+            content: t.content,
+            category: t.category,
+            priority: t.priority,
+            starred: t.starred,
+            status: t.status,
+            view: t.view,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) setAnswer(data.answer);
+      else setAskError(data.error ?? "Something went wrong.");
+    } catch {
+      setAskError("Could not reach the AI. Try again.");
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  async function summarizeJournal() {
+    const transcript = journalDraft.trim();
+    if (!transcript || summarizing) return;
+    setSummarizing(true);
+    setJournalError("");
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setJournalError(data.error ?? "Summary failed.");
+        return;
+      }
+      await supabase
+        .from("journal")
+        .insert({ raw_transcript: transcript, ai_summary: data.summary });
+      setJournalDraft("");
+      loadJournal();
+    } catch {
+      setJournalError("Could not reach the AI. Try again.");
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
+  function onMealPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      const base64 = result.split(",")[1] ?? "";
+      setMealImage({ data: base64, mediaType: file.type });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function logMeal(e: React.FormEvent) {
+    e.preventDefault();
+    if (estimating) return;
+    if (!mealDraft.trim() && !mealImage) {
+      setMealError("Describe the meal or attach a photo.");
+      return;
+    }
+    setEstimating(true);
+    setMealError("");
+    try {
+      const res = await fetch("/api/nutrition", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: mealDraft.trim(), image: mealImage }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMealError(data.error ?? "Estimate failed.");
+        return;
+      }
+      await supabase.from("nutrition").insert({
+        meal: data.meal,
+        calories: data.calories,
+        protein: data.protein,
+      });
+      setMealDraft("");
+      setMealImage(null);
+      setLogging(false);
+      loadMeals();
+    } catch {
+      setMealError("Could not reach the AI. Try again.");
+    } finally {
+      setEstimating(false);
+    }
   }
 
   async function completeTask(id: string) {
@@ -191,6 +374,10 @@ export default function Dashboard() {
 
   const money = (n: number) =>
     "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+  const totalCalories = meals.reduce((sum, m) => sum + (m.calories ?? 0), 0);
+  const totalProtein = meals.reduce((sum, m) => sum + (m.protein ?? 0), 0);
+  const kcalLeft = Math.max(0, CALORIE_TARGET - totalCalories);
 
   if (!authed) {
     return (
@@ -345,17 +532,45 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Journal */}
+          {/* Journal — AI summary (Phase 3) */}
           <section className="panel">
-            <PanelTitle>Journal</PanelTitle>
-            <button className="mb-3 flex w-full items-center justify-center gap-2 rounded border border-acid/40 bg-acid/5 py-2 text-[12px] text-acid hover:bg-acid/10">
-              <span className="h-2 w-2 rounded-full bg-acid" />
-              Hold to voice-note your day
+            <PanelTitle right={<span className="text-[10px] text-acidDim">AI</span>}>
+              Journal
+            </PanelTitle>
+            <button
+              disabled
+              title="Voice capture arrives in Phase 4"
+              className="mb-3 flex w-full items-center justify-center gap-2 rounded border border-line bg-panel2 py-2 text-[12px] text-muted"
+            >
+              <span className="h-2 w-2 rounded-full bg-muted" />
+              Voice-note your day · Phase 4
             </button>
-            <div className="text-[11px] text-muted">
-              <div className="mb-1 uppercase tracking-wider">Yesterday</div>
-              Strong creative output in the morning; closed the client call well.
-              Energy dipped after a late lunch — note the carb crash pattern.
+            <textarea
+              value={journalDraft}
+              onChange={(e) => setJournalDraft(e.target.value)}
+              placeholder="Type or paste your day — Claude will summarize it…"
+              rows={3}
+              className="w-full resize-none rounded border border-line bg-panel2 px-2 py-1.5 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={summarizeJournal}
+                disabled={summarizing || !journalDraft.trim()}
+                className="chip hover:text-acid disabled:opacity-40"
+              >
+                {summarizing ? "Summarizing…" : "Summarize & save"}
+              </button>
+              {journalError && (
+                <span className="text-[11px] text-red-400">{journalError}</span>
+              )}
+            </div>
+            <div className="mt-3 text-[11px] text-muted">
+              <div className="mb-1 uppercase tracking-wider">Latest</div>
+              {journal ? (
+                journal.ai_summary ?? journal.raw_transcript
+              ) : (
+                <span className="text-muted">No entries yet — write one above.</span>
+              )}
             </div>
           </section>
         </div>
@@ -390,47 +605,110 @@ export default function Dashboard() {
             </ol>
           </section>
 
-          {/* Nutrition */}
+          {/* Nutrition — AI estimate (Phase 3) */}
           <section className="panel">
-            <PanelTitle right={<button className="chip hover:text-acid">+ Log</button>}>
+            <PanelTitle
+              right={
+                <button
+                  onClick={() => {
+                    setLogging((v) => !v);
+                    setMealError("");
+                  }}
+                  className="chip hover:text-acid"
+                >
+                  {logging ? "Close" : "+ Log"}
+                </button>
+              }
+            >
               Nutrition
             </PanelTitle>
+
+            {logging && (
+              <form onSubmit={logMeal} className="mb-3 space-y-2 rounded border border-line bg-panel2 p-2">
+                <input
+                  value={mealDraft}
+                  onChange={(e) => setMealDraft(e.target.value)}
+                  placeholder="e.g. chicken burrito bowl with guac"
+                  className="w-full rounded border border-line bg-panel px-2 py-1 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <label className="chip cursor-pointer hover:text-acid">
+                    {mealImage ? "Photo ✓" : "+ Photo"}
+                    <input type="file" accept="image/*" onChange={onMealPhoto} className="hidden" />
+                  </label>
+                  <button
+                    disabled={estimating}
+                    className="rounded bg-acid px-3 py-1 text-[12px] font-semibold text-ink hover:bg-acid/90 disabled:opacity-50"
+                  >
+                    {estimating ? "Estimating…" : "Estimate & log"}
+                  </button>
+                </div>
+                {mealError && <p className="text-[11px] text-red-400">{mealError}</p>}
+              </form>
+            )}
+
             <div className="space-y-1">
-              {MEALS.map((m, i) => (
-                <div key={i} className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]">
+              {meals.length === 0 && (
+                <p className="py-1 text-[12px] text-muted">
+                  No meals logged today — tap + Log.
+                </p>
+              )}
+              {meals.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]"
+                >
                   <span className="text-ghost">{m.meal}</span>
-                  <span className="text-muted">{m.calories} kcal · {m.protein}p</span>
+                  <span className="text-muted">
+                    {m.calories ?? 0} kcal · {m.protein ?? 0}p
+                  </span>
                 </div>
               ))}
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-              <Stat n={HEALTH.calories} label="kcal" />
-              <Stat n={HEALTH.protein} label="protein g" />
-              <Stat n={HEALTH.target} label="kcal left" />
+              <Stat n={totalCalories} label="kcal" />
+              <Stat n={totalProtein} label="protein g" />
+              <Stat n={kcalLeft} label="kcal left" />
             </div>
           </section>
         </div>
       </div>
 
-      {/* ASK BAR */}
+      {/* ASK BAR — Claude over live tasks (Phase 3) */}
       <div className="fixed inset-x-0 bottom-0 border-t border-line bg-ink/95 px-3 py-3 backdrop-blur md:px-5">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            alert("Wired in Phase 3 (AI): this will ask Claude using your live task data.");
-          }}
-          className="mx-auto flex max-w-5xl gap-2"
-        >
-          <input
-            value={ask}
-            onChange={(e) => setAsk(e.target.value)}
-            placeholder="Ask your OS:  what are the top 3 things I should do right now?"
-            className="flex-1 rounded border border-line bg-panel px-3 py-2 text-[13px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
-          />
-          <button className="rounded bg-acid px-5 py-2 text-[13px] font-semibold text-ink hover:bg-acid/90">
-            Ask
-          </button>
-        </form>
+        <div className="mx-auto max-w-5xl">
+          {(answer || askError) && (
+            <div className="mb-2 flex items-start gap-2 rounded border border-line bg-panel p-3 text-[13px]">
+              <span className="panel-title mt-0.5 shrink-0 text-acidDim">OS</span>
+              <p className={`flex-1 whitespace-pre-wrap ${askError ? "text-red-400" : "text-ghost"}`}>
+                {askError || answer}
+              </p>
+              <button
+                onClick={() => {
+                  setAnswer("");
+                  setAskError("");
+                }}
+                className="chip shrink-0 hover:text-acid"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          <form onSubmit={askOperator} className="flex gap-2">
+            <input
+              value={ask}
+              onChange={(e) => setAsk(e.target.value)}
+              placeholder="Ask your OS:  what are the top 3 things I should do right now?"
+              className="flex-1 rounded border border-line bg-panel px-3 py-2 text-[13px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+            />
+            <button
+              disabled={asking || !ask.trim()}
+              className="rounded bg-acid px-5 py-2 text-[13px] font-semibold text-ink hover:bg-acid/90 disabled:opacity-50"
+            >
+              {asking ? "Asking…" : "Ask"}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

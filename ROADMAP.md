@@ -30,12 +30,21 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 4. Replace the mock data in `app/page.tsx` with live queries.
 5. Make tasks/habits/goals actually save when you check or add them.
 
-### Phase 3 — AI features (Claude)
-- Classify a new task into a category + priority.
-- Summarize a journal transcript.
-- Estimate calories/protein from a meal description or photo.
-- Answer "what are the top 3 things I should do right now?" from your task rows.
-  (This is the bottom **Ask** bar — currently a stub.)
+### ✅ Phase 3 — AI features (Claude) (DONE)
+Each feature runs server-side in an App Router route handler under `app/api/*`,
+so `ANTHROPIC_API_KEY` never reaches the browser. Add the key to `.env.local`.
+- ✅ Classify a new task into a category + priority — `POST /api/classify`,
+  runs automatically when you add a Key Task.
+- ✅ Summarize a journal transcript — `POST /api/summarize`; the Journal panel
+  now has a text box that summarizes and saves to the `journal` table.
+- ✅ Estimate calories/protein from a meal description or photo —
+  `POST /api/nutrition`; the Nutrition "+ Log" form estimates and saves to the
+  `nutrition` table, and today's totals update live.
+- ✅ Answer "what are the top 3 things I should do right now?" from your task
+  rows — `POST /api/ask`, wired into the bottom **Ask** bar (was a stub).
+
+> If `ANTHROPIC_API_KEY` is missing, the AI routes degrade gracefully: adding a
+> task still saves it (uncategorized), and the other panels show a short error.
 
 ### Phase 4 — Voice capture (Telegram + Whisper)
 - A Vercel serverless function as a Telegram bot webhook.
