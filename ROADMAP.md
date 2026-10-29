@@ -23,12 +23,24 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) (DONE)
+1. ✅ Create a free Supabase project.
+2. ✅ Run `supabase/schema.sql` in the Supabase SQL editor.
+3. ✅ Password-protected login (Supabase Auth) — see `app/login/page.tsx`.
+4. ✅ Mock data in `app/page.tsx` replaced with live queries:
+   - **Finance Pulse** reads the `finance` table (labels `net_worth`,
+     `month_change`, `day_change`).
+   - **Key Tasks** / **Kanban** / **Brain categories** all read the `tasks`
+     table (Kanban splits by the `view` column, Brain counts by `category`).
+   - **Daily Habits**, **Goals**, and **Nutrition** read `habits`, `goals`,
+     and `nutrition`.
+5. ✅ Tasks, habits, goals, and meals now save:
+   - Add / complete a task; add / remove a goal; log a meal.
+   - Checking a habit persists for the day in the `habits` table.
+
+> Want to see it populated fast? After running `schema.sql`, also run
+> `supabase/seed.sql` for example data. The **Calendar** panel stays
+> illustrative until a future phase adds an events table.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
