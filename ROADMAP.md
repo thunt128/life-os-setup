@@ -23,12 +23,26 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) (DONE)
+1. Create a free Supabase project. _(your step — one-time setup)_
+2. Run `supabase/schema.sql` in the Supabase SQL editor. _(your step)_
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx`.
+4. ✅ Mock data in `app/page.tsx` replaced with live Supabase queries.
+5. ✅ Tasks, habits, goals (and meals) save when you add or check them.
+
+> The dashboard is now driven by the database. The data layer lives in
+> `lib/db.ts` (typed helpers mirroring `supabase/schema.sql`):
+> - **Finance Pulse** — reads the `finance` table (hero = a "net worth" row).
+> - **Key Tasks** — starred active `tasks`; add + complete persist.
+> - **Daily Habits** — today's `habits` (grouped by `parent_id`); toggle + add persist.
+> - **CRM · Kanban** — active `tasks` grouped by their `view` column.
+> - **Brain · Life Categories** — live active-task counts per `category`.
+> - **Journal** — latest `journal` entry (voice/AI come in Phases 3–4).
+> - **Goals** — this month's `goals`; add persists.
+> - **Nutrition** — today's `nutrition` rows; "+ Log" inserts, totals computed.
+>
+> The **Calendar** panel is still a placeholder — there is no calendar table
+> in the schema yet. The bottom **Ask** bar is a Phase 3 stub.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
