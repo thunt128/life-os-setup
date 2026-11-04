@@ -30,12 +30,20 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 4. Replace the mock data in `app/page.tsx` with live queries.
 5. Make tasks/habits/goals actually save when you check or add them.
 
-### Phase 3 — AI features (Claude)
-- Classify a new task into a category + priority.
-- Summarize a journal transcript.
-- Estimate calories/protein from a meal description or photo.
+### ✅ Phase 3 — AI features (Claude) (DONE)
+- Classify a new task into a category + priority. → `POST /api/classify-task`,
+  wired into the **Key Tasks** add form.
+- Summarize a journal transcript. → `POST /api/summarize-journal`, wired into
+  the live **Journal** panel.
+- Estimate calories/protein from a meal description or photo. →
+  `POST /api/estimate-meal` (accepts `description` and/or an image data URL),
+  wired into the live **Nutrition** panel.
 - Answer "what are the top 3 things I should do right now?" from your task rows.
-  (This is the bottom **Ask** bar — currently a stub.)
+  → `POST /api/ask`, wired into the bottom **Ask** bar (no longer a stub).
+
+> All AI calls run server-side in `app/api/*` route handlers using
+> `ANTHROPIC_API_KEY`; the key never reaches the browser. The shared Claude
+> client lives in `lib/anthropic.ts`.
 
 ### Phase 4 — Voice capture (Telegram + Whisper)
 - A Vercel serverless function as a Telegram bot webhook.
@@ -58,9 +66,18 @@ Then open http://localhost:3000
 ```
 life-os-setup/
 ├── app/
+│   ├── api/             # Claude AI route handlers (Phase 3, server-side)
+│   │   ├── ask/             # top-3 / Q&A over your task rows
+│   │   ├── classify-task/   # task → category + priority
+│   │   ├── estimate-meal/   # meal text/photo → calories + protein
+│   │   └── summarize-journal/
+│   ├── login/           # password login (Supabase Auth)
 │   ├── globals.css      # Tailwind + base styles
 │   ├── layout.tsx       # root layout, fonts, metadata
-│   └── page.tsx         # the Operator dashboard (mock data for now)
+│   └── page.tsx         # the Operator dashboard (live tasks/journal/nutrition)
+├── lib/
+│   ├── anthropic.ts     # shared server-side Claude client
+│   └── supabaseClient.ts
 ├── supabase/
 │   └── schema.sql       # database tables + row-level security
 ├── .env.local.example   # copy to .env.local and add your keys
