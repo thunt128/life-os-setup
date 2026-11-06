@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+
+/* ------------------------------------------------------------------ */
+/*  ROW TYPES — these mirror supabase/schema.sql                       */
+/* ------------------------------------------------------------------ */
 
 type TaskRow = {
   id: string;
@@ -14,47 +18,63 @@ type TaskRow = {
   view: "today" | "week" | "month";
 };
 
-/* ------------------------------------------------------------------ */
-/*  MOCK DATA                                                          */
-/*  This is hard-coded for now. In Phase 2 it gets replaced by live   */
-/*  Supabase queries. The shapes here match the database schema.      */
-/* ------------------------------------------------------------------ */
-
-const FINANCE = { netWorth: 2481300, month: 184000, day: 56210 };
-
-const FINANCE_BARS = [
-  8, 10, 7, 12, 9, 14, 11, 16, 13, 18, 15, 20, 17, 22, 19, 24, 21, 26, 23, 28,
-];
-
-const KEY_TASKS = [
-  { id: 1, content: "Send investment proposal to client", category: "business" },
-  { id: 2, content: "Review Q3 portfolio for risk exposure", category: "finance" },
-  { id: 3, content: "Ship dashboard v1.1 nutrition fix", category: "products" },
-];
-
-const HABIT_GROUPS = [
-  { name: "Morning", items: ["Warm-up", "Lift", "Stretch"] },
-  { name: "Supplements", items: ["Creatine", "Omega-3", "Vit D", "Magnesium"] },
-  { name: "Deep work", items: ["Scroll X", "Market research", "Ideate"] },
-  { name: "Comms", items: ["Reply DMs", "Engage comments"] },
-  { name: "Build", items: ["Portfolio", "Risk scan", "Dashboard"] },
-];
-
-const KANBAN = {
-  today: ["Send investment proposal to client", "Review Q3 portfolio for risk exposure"],
-  week: ["Draft 3 X threads on AI agents", "Renew company compliance filing"],
-  month: ["Set up cold-storage wallet backup", "Outline follow-on finance video"],
+type HabitRow = {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  date: string;
+  completed: boolean;
 };
 
-const CATEGORIES = [
-  { key: "legal", note: "2 open" },
-  { key: "finance", note: "live · synced" },
-  { key: "content", note: "4 in pipeline" },
-  { key: "products", note: "1 shipping" },
-  { key: "opsec", note: "backup overdue", warn: true },
-  { key: "business", note: "3 opportunities" },
+type GoalRow = {
+  id: string;
+  content: string;
+  period: "week" | "month" | null;
+};
+
+type NutritionRow = {
+  id: string;
+  meal: string;
+  calories: number | null;
+  protein: number | null;
+  eaten_at: string;
+};
+
+type FinanceRow = {
+  id: string;
+  label: string;
+  amount: number | null;
+  as_of: string;
+};
+
+/* ------------------------------------------------------------------ */
+/*  STATIC CONFIG                                                      */
+/* ------------------------------------------------------------------ */
+
+// Life categories we track. Live counts are computed from task rows.
+const CATEGORY_KEYS = [
+  "legal",
+  "finance",
+  "content",
+  "products",
+  "opsec",
+  "business",
+] as const;
+
+// Daily protein/calorie target (not stored per-row in the schema).
+const CALORIE_TARGET = 2040;
+
+// Default habit template. The first time you open the app on a new day
+// these rows get seeded into the `habits` table so checking them persists.
+const DEFAULT_HABITS: { group: string; items: string[] }[] = [
+  { group: "Morning", items: ["Warm-up", "Lift", "Stretch"] },
+  { group: "Supplements", items: ["Creatine", "Omega-3", "Vit D", "Magnesium"] },
+  { group: "Deep work", items: ["Scroll X", "Market research", "Ideate"] },
+  { group: "Comms", items: ["Reply DMs", "Engage comments"] },
+  { group: "Build", items: ["Portfolio", "Risk scan", "Dashboard"] },
 ];
 
+// Calendar has no table in the schema yet, so it stays as sample data.
 const CALENDAR = [
   { time: "09:30", label: "Standup w/ team" },
   { time: "11:30", label: "Investor call — fund II" },
@@ -62,19 +82,28 @@ const CALENDAR = [
   { time: "16:30", label: "1:1 with editor" },
 ];
 
-const GOALS = [
-  "Ship the OS mobile PWA",
-  "Publish 20 videos",
-  "Gym every day",
-  "Close 2 enterprise deals",
+// Static sparkline shape for the finance panel (no time-series table yet).
+const FINANCE_BARS = [
+  8, 10, 7, 12, 9, 14, 11, 16, 13, 18, 15, 20, 17, 22, 19, 24, 21, 26, 23, 28,
 ];
 
-const MEALS = [
-  { meal: "Chicken & rice", calories: 550, protein: 46 },
-  { meal: "Greek yogurt + berries", calories: 210, protein: 18 },
-];
+/* ------------------------------------------------------------------ */
+/*  DATE HELPERS                                                       */
+/* ------------------------------------------------------------------ */
 
-const HEALTH = { calories: 760, protein: 64, target: 2040 };
+// Local calendar date as YYYY-MM-DD (matches Postgres `date` columns).
+function todayISO() {
+  const d = new Date();
+  const off = d.getTimezoneOffset();
+  return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10);
+}
+
+// Start of today as an ISO timestamp, for filtering `eaten_at`.
+function startOfTodayISO() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
 
 /* ------------------------------------------------------------------ */
 /*  SMALL UI HELPERS                                                   */
@@ -118,6 +147,15 @@ function Check({
   );
 }
 
+function Stat({ n, label }: { n: number; label: string }) {
+  return (
+    <div className="rounded border border-line bg-panel2 py-2">
+      <div className="text-lg font-semibold text-acid">{n}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  PAGE                                                               */
 /* ------------------------------------------------------------------ */
@@ -125,31 +163,115 @@ function Check({
 export default function Dashboard() {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
+
+  // Live data slices
   const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [habits, setHabits] = useState<HabitRow[]>([]);
+  const [goals, setGoals] = useState<GoalRow[]>([]);
+  const [meals, setMeals] = useState<NutritionRow[]>([]);
+  const [finance, setFinance] = useState<FinanceRow[]>([]);
+  const [journal, setJournal] = useState<string | null>(null);
+
+  // Input / UI state
   const [newTask, setNewTask] = useState("");
+  const [newGoal, setNewGoal] = useState("");
   const [revealMoney, setRevealMoney] = useState(false);
-  const [done, setDone] = useState<Record<string, boolean>>({});
   const [ask, setAsk] = useState("");
 
-  // --- Auth gate: redirect to /login if not signed in ---
+  /* ---------------- loaders ---------------- */
+
+  const loadTasks = useCallback(async () => {
+    const { data } = await supabase
+      .from("tasks")
+      .select("*")
+      .order("priority", { ascending: false });
+    if (data) setTasks(data as TaskRow[]);
+  }, []);
+
+  // Seed today's habit rows from the default template if none exist yet.
+  const seedHabits = useCallback(async (date: string) => {
+    for (const grp of DEFAULT_HABITS) {
+      const { data: parent } = await supabase
+        .from("habits")
+        .insert({ name: grp.group, date })
+        .select("id")
+        .single();
+      if (!parent) continue;
+      await supabase.from("habits").insert(
+        grp.items.map((item) => ({ name: item, parent_id: parent.id, date }))
+      );
+    }
+  }, []);
+
+  const loadHabits = useCallback(async () => {
+    const date = todayISO();
+    let { data } = await supabase.from("habits").select("*").eq("date", date);
+    if (!data || data.length === 0) {
+      await seedHabits(date);
+      ({ data } = await supabase.from("habits").select("*").eq("date", date));
+    }
+    if (data) setHabits(data as HabitRow[]);
+  }, [seedHabits]);
+
+  const loadGoals = useCallback(async () => {
+    const { data } = await supabase
+      .from("goals")
+      .select("*")
+      .eq("period", "month")
+      .order("created_at", { ascending: true });
+    if (data) setGoals(data as GoalRow[]);
+  }, []);
+
+  const loadMeals = useCallback(async () => {
+    const { data } = await supabase
+      .from("nutrition")
+      .select("*")
+      .gte("eaten_at", startOfTodayISO())
+      .order("eaten_at", { ascending: true });
+    if (data) setMeals(data as NutritionRow[]);
+  }, []);
+
+  const loadFinance = useCallback(async () => {
+    const { data } = await supabase
+      .from("finance")
+      .select("*")
+      .order("as_of", { ascending: false });
+    if (data) setFinance(data as FinanceRow[]);
+  }, []);
+
+  const loadJournal = useCallback(async () => {
+    const { data } = await supabase
+      .from("journal")
+      .select("ai_summary, raw_transcript, date")
+      .order("date", { ascending: false })
+      .limit(1);
+    const row = data?.[0] as { ai_summary: string | null; raw_transcript: string | null } | undefined;
+    setJournal(row ? row.ai_summary || row.raw_transcript || null : null);
+  }, []);
+
+  const loadAll = useCallback(() => {
+    loadTasks();
+    loadHabits();
+    loadGoals();
+    loadMeals();
+    loadFinance();
+    loadJournal();
+  }, [loadTasks, loadHabits, loadGoals, loadMeals, loadFinance, loadJournal]);
+
+  /* ---------------- auth gate ---------------- */
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) {
         router.replace("/login");
       } else {
         setAuthed(true);
-        loadTasks();
+        loadAll();
       }
     });
-  }, [router]);
+  }, [router, loadAll]);
 
-  async function loadTasks() {
-    const { data } = await supabase
-      .from("tasks")
-      .select("*")
-      .order("priority", { ascending: false });
-    if (data) setTasks(data as TaskRow[]);
-  }
+  /* ---------------- mutations ---------------- */
 
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
@@ -165,32 +287,105 @@ export default function Dashboard() {
     loadTasks();
   }
 
+  async function toggleHabit(h: HabitRow) {
+    // optimistic flip, then persist
+    setHabits((prev) =>
+      prev.map((x) => (x.id === h.id ? { ...x, completed: !x.completed } : x))
+    );
+    await supabase.from("habits").update({ completed: !h.completed }).eq("id", h.id);
+  }
+
+  async function addGoal(e: React.FormEvent) {
+    e.preventDefault();
+    const content = newGoal.trim();
+    if (!content) return;
+    setNewGoal("");
+    await supabase.from("goals").insert({ content, period: "month" });
+    loadGoals();
+  }
+
+  async function logMeal() {
+    const meal = window.prompt("Meal description?");
+    if (!meal || !meal.trim()) return;
+    const calStr = window.prompt("Calories? (kcal)", "");
+    const proStr = window.prompt("Protein? (g)", "");
+    const calories = calStr ? parseInt(calStr, 10) : null;
+    const protein = proStr ? parseInt(proStr, 10) : null;
+    await supabase.from("nutrition").insert({
+      meal: meal.trim(),
+      calories: Number.isFinite(calories as number) ? calories : null,
+      protein: Number.isFinite(protein as number) ? protein : null,
+    });
+    loadMeals();
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
     router.replace("/login");
   }
 
+  /* ---------------- derived ---------------- */
+
   const keyTasks = tasks.filter((t) => t.starred && t.status === "active");
 
-  const toggle = (key: string) =>
-    setDone((d) => ({ ...d, [key]: !d[key] }));
+  // Kanban columns derived from active tasks grouped by `view`.
+  const kanban = useMemo(() => {
+    const cols: Record<"today" | "week" | "month", TaskRow[]> = {
+      today: [],
+      week: [],
+      month: [],
+    };
+    for (const t of tasks) {
+      if (t.status === "active") cols[t.view]?.push(t);
+    }
+    return cols;
+  }, [tasks]);
+
+  // Active-task counts per life category.
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tasks) {
+      if (t.status === "active" && t.category) {
+        counts[t.category] = (counts[t.category] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [tasks]);
+
+  // Habit groups rebuilt from live rows (parents + nested children).
+  const habitGroups = useMemo(() => {
+    const parents = habits.filter((h) => !h.parent_id);
+    return parents.map((p) => ({
+      parent: p,
+      items: habits.filter((h) => h.parent_id === p.id),
+    }));
+  }, [habits]);
+
+  const habitChildren = habits.filter((h) => h.parent_id);
+  const habitPct = habitChildren.length
+    ? Math.round(
+        (habitChildren.filter((h) => h.completed).length / habitChildren.length) * 100
+      )
+    : 0;
+
+  const financeBy = (label: string) =>
+    finance.find((f) => f.label === label)?.amount ?? 0;
+  const netWorth = financeBy("net_worth");
+  const monthChange = financeBy("month");
+  const dayChange = financeBy("day");
+
+  const totalCalories = meals.reduce((s, m) => s + (m.calories ?? 0), 0);
+  const totalProtein = meals.reduce((s, m) => s + (m.protein ?? 0), 0);
+  const kcalLeft = Math.max(CALORIE_TARGET - totalCalories, 0);
+
+  const money = (n: number) =>
+    "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
     day: "numeric",
   });
-
-  const allHabits = useMemo(
-    () => HABIT_GROUPS.flatMap((g) => g.items.map((i) => `${g.name}:${i}`)),
-    []
-  );
-  const habitPct = Math.round(
-    (allHabits.filter((k) => done[k]).length / allHabits.length) * 100
-  );
-
-  const money = (n: number) =>
-    "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 
   if (!authed) {
     return (
@@ -209,8 +404,13 @@ export default function Dashboard() {
           <span className="panel-title">Personal OS · V1</span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="panel-title">{today} · {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-          <button onClick={signOut} className="chip hover:text-acid">Sign out</button>
+          <span className="panel-title">
+            {today} ·{" "}
+            {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          <button onClick={signOut} className="chip hover:text-acid">
+            Sign out
+          </button>
         </div>
       </header>
 
@@ -218,7 +418,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* LEFT COLUMN */}
         <div className="space-y-3 lg:col-span-3">
-          {/* Finance Pulse */}
+          {/* Finance Pulse — LIVE */}
           <section className="panel">
             <PanelTitle
               right={
@@ -230,10 +430,10 @@ export default function Dashboard() {
               Finance Pulse
             </PanelTitle>
             <div className={revealMoney ? "" : "select-none blur-md"}>
-              <div className="text-3xl font-semibold text-acid">{money(FINANCE.netWorth)}</div>
+              <div className="text-3xl font-semibold text-acid">{money(netWorth)}</div>
               <div className="mt-1 flex gap-4 text-[12px]">
-                <span className="text-acidDim">Month +{money(FINANCE.month)}</span>
-                <span className="text-acidDim">Today +{money(FINANCE.day)}</span>
+                <span className="text-acidDim">Month +{money(monthChange)}</span>
+                <span className="text-acidDim">Today +{money(dayChange)}</span>
               </div>
             </div>
             <div className="mt-3 flex h-12 items-end gap-1">
@@ -243,7 +443,7 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Key Tasks — LIVE from Supabase */}
+          {/* Key Tasks — LIVE */}
           <section className="panel">
             <PanelTitle right={<span className="text-[10px] text-acidDim">live</span>}>
               Key Tasks · Today
@@ -271,7 +471,7 @@ export default function Dashboard() {
             </form>
           </section>
 
-          {/* Daily Habits */}
+          {/* Daily Habits — LIVE */}
           <section className="panel">
             <PanelTitle right={<span className="text-[11px] text-acid">{habitPct}%</span>}>
               Daily Habits
@@ -280,21 +480,24 @@ export default function Dashboard() {
               <div className="h-full bg-acid transition-all" style={{ width: `${habitPct}%` }} />
             </div>
             <div className="space-y-3">
-              {HABIT_GROUPS.map((g) => {
-                const keys = g.items.map((i) => `${g.name}:${i}`);
-                const n = keys.filter((k) => done[k]).length;
+              {habitGroups.map(({ parent, items }) => {
+                const n = items.filter((i) => i.completed).length;
                 return (
-                  <div key={g.name}>
+                  <div key={parent.id}>
                     <div className="mb-1 flex justify-between text-[11px] text-muted">
-                      <span className="uppercase tracking-wider">{g.name}</span>
-                      <span>{n}/{g.items.length}</span>
+                      <span className="uppercase tracking-wider">{parent.name}</span>
+                      <span>
+                        {n}/{items.length}
+                      </span>
                     </div>
-                    {g.items.map((item) => {
-                      const k = `${g.name}:${item}`;
-                      return (
-                        <Check key={k} checked={!!done[k]} onChange={() => toggle(k)} label={item} />
-                      );
-                    })}
+                    {items.map((item) => (
+                      <Check
+                        key={item.id}
+                        checked={item.completed}
+                        onChange={() => toggleHabit(item)}
+                        label={item.name}
+                      />
+                    ))}
                   </div>
                 );
               })}
@@ -304,7 +507,7 @@ export default function Dashboard() {
 
         {/* CENTER COLUMN */}
         <div className="space-y-3 lg:col-span-5">
-          {/* Kanban */}
+          {/* Kanban — LIVE from tasks grouped by view */}
           <section className="panel">
             <PanelTitle>CRM · Kanban</PanelTitle>
             <div className="grid grid-cols-3 gap-2">
@@ -314,9 +517,15 @@ export default function Dashboard() {
                     {col === "today" ? "Today" : col === "week" ? "This week" : "This month"}
                   </div>
                   <div className="space-y-2">
-                    {KANBAN[col].map((c, i) => (
-                      <div key={i} className="rounded border border-line bg-panel p-2 text-[12px] text-ghost">
-                        {c}
+                    {kanban[col].length === 0 && (
+                      <div className="text-[11px] text-muted">—</div>
+                    )}
+                    {kanban[col].map((t) => (
+                      <div
+                        key={t.id}
+                        className="rounded border border-line bg-panel p-2 text-[12px] text-ghost"
+                      >
+                        {t.content}
                       </div>
                     ))}
                   </div>
@@ -325,27 +534,25 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Brain — life categories */}
+          {/* Brain — life categories, LIVE counts */}
           <section className="panel">
             <PanelTitle>Brain · Life Categories</PanelTitle>
             <div className="grid grid-cols-2 gap-2">
-              {CATEGORIES.map((c) => (
-                <div
-                  key={c.key}
-                  className={`rounded border bg-panel2 p-3 ${
-                    c.warn ? "border-acid/40" : "border-line"
-                  }`}
-                >
-                  <div className={`text-[12px] uppercase tracking-wider ${c.warn ? "text-acid" : "text-ghost"}`}>
-                    {c.key}
+              {CATEGORY_KEYS.map((key) => {
+                const count = categoryCounts[key] ?? 0;
+                return (
+                  <div key={key} className="rounded border border-line bg-panel2 p-3">
+                    <div className="text-[12px] uppercase tracking-wider text-ghost">{key}</div>
+                    <div className="mt-1 text-[11px] text-muted">
+                      {count === 0 ? "clear" : `${count} open`}
+                    </div>
                   </div>
-                  <div className="mt-1 text-[11px] text-muted">{c.note}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 
-          {/* Journal */}
+          {/* Journal — LIVE latest entry */}
           <section className="panel">
             <PanelTitle>Journal</PanelTitle>
             <button className="mb-3 flex w-full items-center justify-center gap-2 rounded border border-acid/40 bg-acid/5 py-2 text-[12px] text-acid hover:bg-acid/10">
@@ -353,23 +560,25 @@ export default function Dashboard() {
               Hold to voice-note your day
             </button>
             <div className="text-[11px] text-muted">
-              <div className="mb-1 uppercase tracking-wider">Yesterday</div>
-              Strong creative output in the morning; closed the client call well.
-              Energy dipped after a late lunch — note the carb crash pattern.
+              <div className="mb-1 uppercase tracking-wider">Latest</div>
+              {journal ?? "No journal entries yet. Voice capture arrives in Phase 4."}
             </div>
           </section>
         </div>
 
         {/* RIGHT COLUMN */}
         <div className="space-y-3 lg:col-span-4">
-          {/* Calendar */}
+          {/* Calendar — sample data (no table in schema yet) */}
           <section className="panel">
             <PanelTitle right={<span className="h-1.5 w-1.5 rounded-full bg-acid" />}>
               Calendar · Today
             </PanelTitle>
             <div className="space-y-1">
               {CALENDAR.map((e, i) => (
-                <div key={i} className="flex gap-3 rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]">
+                <div
+                  key={i}
+                  className="flex gap-3 rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]"
+                >
                   <span className="text-acidDim">{e.time}</span>
                   <span className="text-ghost">{e.label}</span>
                 </div>
@@ -377,36 +586,62 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* Goals */}
+          {/* Goals — LIVE */}
           <section className="panel">
             <PanelTitle>Goals · This Month</PanelTitle>
+            {goals.length === 0 && (
+              <p className="mb-2 text-[12px] text-muted">No goals yet — add one below.</p>
+            )}
             <ol className="space-y-1.5">
-              {GOALS.map((g, i) => (
-                <li key={i} className="flex gap-2 text-[13px] text-ghost">
+              {goals.map((g, i) => (
+                <li key={g.id} className="flex gap-2 text-[13px] text-ghost">
                   <span className="text-acidDim">{i + 1}</span>
-                  {g}
+                  {g.content}
                 </li>
               ))}
             </ol>
+            <form onSubmit={addGoal} className="mt-3 flex gap-2">
+              <input
+                value={newGoal}
+                onChange={(e) => setNewGoal(e.target.value)}
+                placeholder="+ add a goal"
+                className="flex-1 rounded border border-line bg-panel2 px-2 py-1 text-[12px] text-ghost outline-none placeholder:text-muted focus:border-acid/50"
+              />
+              <button className="chip hover:text-acid">Add</button>
+            </form>
           </section>
 
-          {/* Nutrition */}
+          {/* Nutrition — LIVE */}
           <section className="panel">
-            <PanelTitle right={<button className="chip hover:text-acid">+ Log</button>}>
+            <PanelTitle
+              right={
+                <button onClick={logMeal} className="chip hover:text-acid">
+                  + Log
+                </button>
+              }
+            >
               Nutrition
             </PanelTitle>
             <div className="space-y-1">
-              {MEALS.map((m, i) => (
-                <div key={i} className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]">
+              {meals.length === 0 && (
+                <p className="text-[12px] text-muted">No meals logged today.</p>
+              )}
+              {meals.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center justify-between rounded border border-line bg-panel2 px-2 py-1.5 text-[12px]"
+                >
                   <span className="text-ghost">{m.meal}</span>
-                  <span className="text-muted">{m.calories} kcal · {m.protein}p</span>
+                  <span className="text-muted">
+                    {m.calories ?? 0} kcal · {m.protein ?? 0}p
+                  </span>
                 </div>
               ))}
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-              <Stat n={HEALTH.calories} label="kcal" />
-              <Stat n={HEALTH.protein} label="protein g" />
-              <Stat n={HEALTH.target} label="kcal left" />
+              <Stat n={totalCalories} label="kcal" />
+              <Stat n={totalProtein} label="protein g" />
+              <Stat n={kcalLeft} label="kcal left" />
             </div>
           </section>
         </div>
@@ -432,15 +667,6 @@ export default function Dashboard() {
           </button>
         </form>
       </div>
-    </div>
-  );
-}
-
-function Stat({ n, label }: { n: number; label: string }) {
-  return (
-    <div className="rounded border border-line bg-panel2 py-2">
-      <div className="text-lg font-semibold text-acid">{n}</div>
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
     </div>
   );
 }
