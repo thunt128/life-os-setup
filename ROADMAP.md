@@ -23,12 +23,22 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) (DONE)
+1. Create a free Supabase project. *(one-time setup — do this in Supabase)*
+2. Run `supabase/schema.sql` in the Supabase SQL editor. *(one-time setup)*
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx` + auth gate.
+4. ✅ Mock data in `app/page.tsx` replaced with live queries: Key Tasks,
+   Kanban, Daily Habits, Goals, Nutrition/Health, Finance Pulse, Journal.
+5. ✅ Tasks, habits, goals and meals now save (add / check / remove) to Supabase.
+
+> Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in
+> `.env.local` (see `.env.local.example`) to go live. Without them the app
+> still builds and runs against placeholder values.
+>
+> Panels still on shell data (no backing table yet): **Brain · Life
+> Categories** and **Calendar**. Finance Pulse reads the `finance` table by
+> label (`net_worth`, `month_change`, `day_change`) and falls back to sample
+> numbers until rows exist; its bar chart is decorative.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
