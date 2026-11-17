@@ -23,12 +23,27 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) — CODE DONE
+The app-side work is finished; the two remaining steps are one-time setup
+you do in your own Supabase project.
+
+1. **You do this:** Create a free Supabase project, then copy its URL + anon
+   key into `.env.local` (see `.env.local.example`).
+2. **You do this:** Run `supabase/schema.sql` in the Supabase SQL editor, and
+   create your single login user under Authentication → Users.
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx` + an
+   auth gate on the dashboard.
+4. ✅ Mock data in `app/page.tsx` replaced with live queries for every panel
+   backed by a table: Key Tasks, Daily Habits, CRM Kanban, Brain categories,
+   Finance Pulse, Journal, Goals, and Nutrition. Data access lives in
+   `lib/db.ts`, typed to match `supabase/schema.sql`.
+5. ✅ Saving works: adding/completing tasks, checking and adding habits
+   (auto-seeded per day, carried over from the previous day), adding/removing
+   goals, and logging meals all write to Supabase.
+
+> Still mock: the **Calendar** panel (no table in the schema yet) and the
+> Finance sparkline (decorative). The **Ask** bar and the Journal voice note
+> remain stubs until Phases 3–4.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
