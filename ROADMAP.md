@@ -23,12 +23,28 @@ time. **Phase 1 is done** — the rest we build together, checking in before eac
 > Right now the dashboard shows hard-coded sample data so you can see and feel
 > the interface. The next phases make it real.
 
-### Phase 2 — Database + Auth (live data)
-1. Create a free Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add a password-protected login (Supabase Auth).
-4. Replace the mock data in `app/page.tsx` with live queries.
-5. Make tasks/habits/goals actually save when you check or add them.
+### ✅ Phase 2 — Database + Auth (live data) (DONE)
+1. Create a free Supabase project. *(your one-time setup — see below)*
+2. Run `supabase/schema.sql` in the Supabase SQL editor. *(your one-time setup)*
+3. ✅ Password-protected login (Supabase Auth) — `app/login/page.tsx`, with an
+   auth gate on the dashboard that redirects you to `/login` when signed out.
+4. ✅ The mock data in `app/page.tsx` is replaced by live Supabase queries.
+   Every panel backed by a table in `schema.sql` now reads live rows:
+   Key Tasks, Kanban (tasks by `view`), Daily Habits, Goals, Nutrition,
+   Finance Pulse and the latest Journal entry. The Brain category tiles show
+   live counts derived from your task rows.
+5. ✅ Tasks, habits, goals and meals save when you add or check them.
+   - Add key tasks and per-column Kanban tasks; tap a task to mark it done.
+   - Daily Habits seed once per day from a default checklist, then each
+     checkbox persists to the `habits` table.
+   - Add month goals; log meals (kcal + protein), with totals computed live.
+
+> **One-time setup:** all queries live in `lib/data.ts` and use the browser
+> Supabase client (`lib/supabaseClient.ts`). Copy `.env.local.example` to
+> `.env.local` and fill in `NEXT_PUBLIC_SUPABASE_URL` and
+> `NEXT_PUBLIC_SUPABASE_ANON_KEY`, then create a user in Supabase Auth to log
+> in with. Panels with no table yet (Calendar, the finance sparkline) stay as
+> placeholder data until a later phase adds them.
 
 ### Phase 3 — AI features (Claude)
 - Classify a new task into a category + priority.
